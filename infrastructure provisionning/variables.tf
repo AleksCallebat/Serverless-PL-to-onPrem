@@ -1,7 +1,4 @@
-variable "databricks_account_id" {
-    description = "The Databricks account ID"
-    type        = string
-}
+
 
 variable "subscription_id"  {
     description = "The Azure subscription ID"
@@ -17,11 +14,11 @@ variable "resource_group_name" {
     description = "The name of the Azure resource group"
     type        = string
 }
-variable "token" {
-  description = "The Databricks personal access token"
-  type        = string
-  sensitive   = true
-}
+# variable "token" {
+#   description = "The Databricks personal access token"
+#   type        = string
+#   sensitive   = true
+# }
 
 variable "workspace_location" {
   description = "The location of the Databricks workspace"
