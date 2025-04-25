@@ -1,11 +1,16 @@
 from flask import Flask, request, jsonify
 import requests
+import configparser
 
 app = Flask(__name__)
 
-# Configuration for the on-prem bucket
-ON_PREM_BUCKET_URL = "http://on-prem-bucket-url"  # Replace with your on-prem bucket URL
-ON_PREM_BUCKET_API_KEY = "your-api-key"  # Replace with your API key or authentication token
+# Load configurations from a .conf file
+config = configparser.ConfigParser()
+config.read('./config.conf')  # Replace with the actual path to your .conf file
+
+# Extract configurations
+ON_PREM_BUCKET_URL = config.get('OnPremBucket', 'URL')
+ON_PREM_BUCKET_API_KEY = config.get('OnPremBucket', 'API_KEY')
 
 @app.route('/proxy/<path:object_path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
 def proxy(object_path):
