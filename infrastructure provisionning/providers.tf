@@ -18,4 +18,5 @@ provider "azurerm" {
 provider "databricks" {
     alias       = "workspace"
     host        = azurerm_databricks_workspace.workspace.workspace_url
+    token       = var.databricks_token
 }
