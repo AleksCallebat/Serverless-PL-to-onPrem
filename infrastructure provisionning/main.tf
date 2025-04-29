@@ -1,72 +1,148 @@
-# main.tf
+# Generate a random string for dbfsnaming
+resource "random_string" "dbfsnaming" {
+  special = false
+  upper   = false
+  length  = 13
+}
+
+# Define subnets using cidrsubnet function
+locals {
+  subnets = {
+    "host" : cidrsubnet(var.vnet_cidr, 2, 0)
+    "container" : cidrsubnet(var.vnet_cidr, 2, 1)
+    "privatelink" : cidrsubnet(var.vnet_cidr, 2, 2)
+  }
+
+  # Generate a random string for dbfs_name
+  dbfs_name       = join("", ["dbstorage", random_string.dbfsnaming.result])
+  managed_rg_name = join("", [module.naming.resource_group.name_unique, "adbmanaged"])
+}
+
+module "naming" {
+  source  = "Azure/naming/azurerm"
+  version = "0.4.1"
+  suffix  = [var.resource_suffix]
+}
+
 
 # Create a resource group
-resource "azurerm_resource_group" "rg" {
-    provider = azurerm
-    name     = var.resource_group_name
-    location = var.workspace_location
+resource "azurerm_resource_group" "this" {
+  name     = var.resource_group_name
+  location = var.location
+
+  tags = var.tags
 }
 
 # Create a virtual network
-resource "azurerm_virtual_network" "vnet" {
-    provider = azurerm
-    name                = "${var.workspace_name}-vnet"
-    location            = var.workspace_location
-    resource_group_name = azurerm_resource_group.rg.name
-    address_space       = ["10.0.0.0/16"]
+resource "azurerm_virtual_network" "this" {
+  name                = module.naming.virtual_network.name
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
+  address_space       = [var.vnet_cidr]
+
+  tags = var.tags
 }
 
-# Create public and private subnets
-resource "azurerm_subnet" "public_subnet" {
-    provider = azurerm
-    name                 = "${var.workspace_name}-public-subnet"
-    resource_group_name  = azurerm_resource_group.rg.name
-    virtual_network_name = azurerm_virtual_network.vnet.name
-    address_prefixes     = ["10.0.1.0/24"]
-    enforce_private_link_endpoint_network_policies = true
+# Create a network security group
+resource "azurerm_network_security_group" "this" {
+  name                = module.naming.network_security_group.name
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
+
+  tags = var.tags
 }
 
-resource "azurerm_subnet" "private_subnet" {
-    provider = azurerm
-    name                 = "${var.workspace_name}-private-subnet"
-    resource_group_name  = azurerm_resource_group.rg.name
-    virtual_network_name = azurerm_virtual_network.vnet.name
-    address_prefixes     = ["10.0.2.0/24"]
-    enforce_private_link_service_network_policies = false
+# Associate the container subnet with the network security group
+resource "azurerm_subnet_network_security_group_association" "container" {
+  subnet_id                 = azurerm_subnet.container.id
+  network_security_group_id = azurerm_network_security_group.this.id
 }
 
-# Create a Databricks workspace with BYOVPC
-resource "azurerm_databricks_workspace" "workspace" {
-    depends_on = [azurerm_resource_group.rg]
-    provider = azurerm
-    location            = var.workspace_location
-    sku                 = "premium"
-    name                = var.workspace_name
-    resource_group_name = azurerm_resource_group.rg.name
+# Associate the host subnet with the network security group
+resource "azurerm_subnet_network_security_group_association" "host" {
+  subnet_id                 = azurerm_subnet.host.id
+  network_security_group_id = azurerm_network_security_group.this.id
+}
 
-    custom_parameters {
-        # public_subnet_name  = azurerm_subnet.public_subnet.name
-        private_subnet_name = azurerm_subnet.private_subnet.name
-        virtual_network_id  = azurerm_virtual_network.vnet.id
+# Create the container subnet
+resource "azurerm_subnet" "container" {
+  name                 = "${module.naming.subnet.name}-container"
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
+
+  address_prefixes = [local.subnets["container"]]
+
+  delegation {
+    name = "databricks-container-subnet-delegation"
+
+    service_delegation {
+      name = "Microsoft.Databricks/workspaces"
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/join/action",
+        "Microsoft.Network/virtualNetworks/subnets/prepareNetworkPolicies/action",
+        "Microsoft.Network/virtualNetworks/subnets/unprepareNetworkPolicies/action",
+      ]
     }
+  }
 }
 
-# Create a Databricks SQL endpoint
-resource "databricks_sql_endpoint" "serverless_sql" {
-    provider = databricks.workspace
-    name                 = var.endpoint_name
-    cluster_size         = var.cluster_size
-    max_num_clusters     = var.max_num_clusters
-    min_num_clusters     = var.min_num_clusters
-    enable_serverless_compute = true
+# Create the host subnet
+resource "azurerm_subnet" "host" {
+  name                 = "${module.naming.subnet.name}-host"
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
+
+  address_prefixes = [local.subnets["host"]]
+
+  delegation {
+    name = "databricks-host-subnet-delegation"
+
+    service_delegation {
+      name = "Microsoft.Databricks/workspaces"
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/join/action",
+        "Microsoft.Network/virtualNetworks/subnets/prepareNetworkPolicies/action",
+        "Microsoft.Network/virtualNetworks/subnets/unprepareNetworkPolicies/action",
+      ]
+    }
+  }
 }
 
-# Output the endpoint ID
-output "sql_endpoint_id" {
-    value = databricks_sql_endpoint.serverless_sql.id
+# Create the privatelink subnet
+resource "azurerm_subnet" "privatelink" {
+  name                 = "${module.naming.subnet.name}-pl"
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
+
+  address_prefixes = [local.subnets["privatelink"]]
 }
 
-# Output the workspace URL
-output "workspace_url" {
-    value = azurerm_databricks_workspace.workspace.workspace_url
+# Create a network security rule for AAD
+resource "azurerm_network_security_rule" "aad" {
+  name                        = "AllowAAD"
+  priority                    = 200
+  direction                   = "Outbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "443"
+  source_address_prefix       = "VirtualNetwork"
+  destination_address_prefix  = "AzureActiveDirectory"
+  resource_group_name         = azurerm_resource_group.this.name
+  network_security_group_name = azurerm_network_security_group.this.name
+}
+
+# Create a network security rule for Azure Front Door
+resource "azurerm_network_security_rule" "azfrontdoor" {
+  name                        = "AllowAzureFrontDoor"
+  priority                    = 201
+  direction                   = "Outbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "443"
+  source_address_prefix       = "VirtualNetwork"
+  destination_address_prefix  = "AzureFrontDoor.Frontend"
+  resource_group_name         = azurerm_resource_group.this.name
+  network_security_group_name = azurerm_network_security_group.this.name
 }
